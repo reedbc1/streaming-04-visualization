@@ -6,13 +6,9 @@ This module creates a live bar chart of products sold by product name.
 The chart opens in a window while the consumer is running and updates
 as each message is consumed.
 
-Author: Denise Case
-Date: 2026-05
+Author: Brendan Reed
+Date: 2026-06
 
-OBS:
-  Don't edit this file - it should remain a working example.
-  Copy it, rename it live_visualizations_yourname.py,
-  and modify your copy for your own charts.
 """
 
 # === DECLARE IMPORTS ===
