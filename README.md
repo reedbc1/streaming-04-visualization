@@ -225,6 +225,7 @@ Clear the terminal, then start the consumer.
 ```shell
 clear
 uv run python -m streaming.kafka_consumer_case
+uv run python -m streaming.kafka_consumer_reed
 ```
 
 To start fresh, see
