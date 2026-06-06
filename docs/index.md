@@ -23,55 +23,48 @@ to get these projects running on your machine.
 
 ### Dataset
 
-Describe the dataset used by your Kafka producer.
+The producer uses the original `data/sales.csv` sales dataset. Each record is
+one course purchase with fields such as `order_id`, `datetime`, `region_id`,
+`product_id`, `unit_price`, `quantity`, customer details, and payment metadata.
 
-Include:
-
-- the name of the dataset file
-- what kind of records it contains
-- which fields are included in each record
-- whether you used the original sales dataset or modified it
+The consumer also uses `data/products.csv` as reference data to map
+`product_id` to `product_name`.
 
 ### Kafka Messages
 
-Describe the messages sent through Kafka.
-
-Include:
-
-- what your producer sends
-- which Kafka topic you used
-- what message key you used, if any
-- whether you changed the message fields
+The producer sends validated sales records to the Kafka topic configured by
+`KAFKA_TOPIC`. The Kafka message key is `region_id`, which keeps records from
+the same region together. The producer message fields remain the original sales
+fields from `sales.csv`.
 
 ### Consumer Processing
 
-Describe what your consumer receives and does with each message.
+The Reed consumer reads sales messages from the beginning of the topic until it
+hits `CONSUMER_MAX_MESSAGES` or the timeout. For each valid message, it:
 
-Include:
-
-- what your consumer receives from Kafka
-- how many messages it consumes
-- what it logs or prints
-- if it writes records to a CSV file
-- if it processes or filters selected fields (be specific)
+- computes `subtotal`, `tax_amount`, and `total`
+- adds `product_name` from `products.csv`
+- updates running sales statistics
+- appends the enriched record to `data/output/consumed_sales.csv`
+- updates the live product sales chart
 
 ### Experiments
 
-Describe the small technical changes you made.
-
-Include at least one Phase 4 change and one Phase 5 application.
+For Phase 4, the live chart was changed from sales subtotal by message to a
+different visualization. For Phase 5, the consumer was enhanced with
+`products.csv` so the stream can be analyzed by product name instead of only by
+product ID.
 
 ### Results
 
-Describe what happened when you ran the producer and consumer.
+The consumer now creates `data/output/sales_chart_reed.png`. The chart is a bar
+chart where the x-axis is `product_name` and the y-axis is the number of units
+sold. Purchases with `quantity` greater than one increase the product count by
+that quantity.
 
 ### Interpretation
 
-Explain what the Kafka streaming workflow showed you.
-
-Include:
-
-- what changed from the original example
-- what you learned from watching messages move through Kafka
-- what the stream could tell a business or organization
-- what business intelligence was gained from the consumed messages
+The original example showed revenue by message. This version shows which
+products are selling as messages arrive. That makes the stream more useful for
+business intelligence because it highlights product demand in real time, not
+just order totals.
