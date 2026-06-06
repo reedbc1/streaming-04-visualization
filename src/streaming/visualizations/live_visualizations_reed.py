@@ -1,8 +1,8 @@
-"""src/streaming/visualizations/live_visualizations_case.py.
+"""src/streaming/visualizations/live_visualizations_reed.py.
 
 Project-specific live visualization functions used by the Kafka consumer.
 
-This module creates a live line chart of sale total by message.
+This module creates a live bar chart of products sold by product name.
 The chart opens in a window while the consumer is running and updates
 as each message is consumed.
 
@@ -40,11 +40,11 @@ __all__ = [
 # === DEFINE LIVE CHART HELPERS ===
 
 
-def init_live_chart() -> tuple[Any, Any, list[int], list[float]]:
+def init_live_chart() -> tuple[Any, Any, dict[str, int]]:
     """Create and show an empty live chart.
 
     Returns:
-        A tuple of (figure, axis, x_values, y_values).
+        A tuple of (figure, axis, product_counts).
     """
     # Matplotlib has a ion() function built in for "interactive ON" mode,
     # which allows the chart to update in real time as we modify it.
@@ -54,15 +54,14 @@ def init_live_chart() -> tuple[Any, Any, list[int], list[float]]:
     # Call subplots() to create a figure and axis for the chart.
     figure, axis = plt.subplots()
 
-    # Initialize empty lists for x and y values.
-    # These will be updated as messages are consumed.
-    x_values: list[int] = []
-    y_values: list[float] = []
+    # Initialize the running product tally.
+    # This will be updated as messages are consumed.
+    product_counts: dict[str, int] = {}
 
     # Set the title and axis labels for the chart.
-    axis.set_title("Sales Subtotal by Message")
-    axis.set_xlabel("Message")
-    axis.set_ylabel("Sale Subtotal ($)")
+    axis.set_title("Products Sold")
+    axis.set_xlabel("Product")
+    axis.set_ylabel("Units Sold")
 
     # Call the figure.show() method to display the chart window.
     figure.show()
@@ -75,16 +74,15 @@ def init_live_chart() -> tuple[Any, Any, list[int], list[float]]:
     # which helps the chart window to update properly.
     figure.canvas.flush_events()
 
-    # Return the figure, axis, and the x and y value lists for later use.
-    return figure, axis, x_values, y_values
+    # Return the figure, axis, and the product tally for later use.
+    return figure, axis, product_counts
 
 
 def update_live_chart(
     *,
     figure: Any,
     axis: Any,
-    x_values: list[int],
-    y_values: list[float],
+    product_counts: dict[str, int],
     message: dict[str, Any],
 ) -> None:
     """Update the live chart with one consumed message.
@@ -94,41 +92,31 @@ def update_live_chart(
     Arguments:
         figure: Matplotlib figure.
         axis: Matplotlib axis.
-        x_values: List of x-axis values already shown.
-        y_values: List of y-axis values already shown.
+        product_counts: Running count of units sold by product name.
         message: One enriched Kafka message dictionary.
 
     Returns:
         None.
     """
-    # The message offset is a unique integer
-    # that increments with each message,
-    # so it works great as a simple x-axis value
-    # to show the order of messages.
-    # Create a new x value from the message offset.
-    new_x = int(message["_kafka_offset"])
-    x_values.append(new_x)
-
-    # Create a new y value from the "total" field in the message,
-    # which contains the sale total for that message.
-    new_y = float(message["subtotal"])
-    y_values.append(new_y)
+    product_name = str(message["product_name"])
+    quantity = int(message["quantity"])
+    product_counts[product_name] = product_counts.get(product_name, 0) + quantity
 
     # Clear the axis
     axis.clear()
 
-    # Re-plot the updated x and y values as a line chart with markers.
-    # Set the marker to "o" to show points at each message.
-    # Options include "o" for circles, "s" for squares, "^" for triangles, and more.
-    axis.plot(x_values, y_values, marker="o")
+    # Re-plot the updated product counts as a bar chart.
+    axis.bar(product_counts.keys(), product_counts.values())
 
     # Set the title and axis labels again after clearing the axis.
-    axis.set_title("Sales Subtotal by Message")
-    axis.set_xlabel("Message")
-    axis.set_ylabel("Sale Subtotal ($)")
+    axis.set_title("Products Sold")
+    axis.set_xlabel("Product")
+    axis.set_ylabel("Units Sold")
+    axis.tick_params(axis="x", labelrotation=30)
 
     # Add a grid to the chart for better readability.
-    axis.grid(True)
+    axis.grid(True, axis="y")
+    figure.tight_layout()
 
     # Call the figure.canvas.draw() method to update the chart with the new data.
     figure.canvas.draw()

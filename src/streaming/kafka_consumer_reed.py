@@ -54,7 +54,7 @@ from dotenv import load_dotenv
 
 from streaming.core.utils import log_env_vars
 from streaming.data_engineering.derived_fields import enrich_message
-from streaming.data_validation.data_contract_case import (
+from streaming.data_validation.data_contract_reed import (
     CONSUMED_FIELDNAMES,
     SALES_REQUIRED_FIELDS,
     validate_required_fields,
@@ -88,7 +88,7 @@ DATA_DIR: Final[Path] = ROOT_DIR / "data"
 OUTPUT_DIR: Final[Path] = DATA_DIR / "output"
 
 OUTPUT_CSV: Final[Path] = OUTPUT_DIR / "consumed_sales.csv"
-OUTPUT_CHART: Final[Path] = OUTPUT_DIR / "sales_chart_case.png"
+OUTPUT_CHART: Final[Path] = OUTPUT_DIR / "sales_chart_reed.png"
 
 REGIONS_CSV: Final[Path] = DATA_DIR / "regions.csv"
 PRODUCTS_CSV: Final[Path] = DATA_DIR / "products.csv"
@@ -203,13 +203,13 @@ def get_kafka_consumer(settings: KafkaSettings) -> Any:
 # ===========================================================================
 
 
-def initialize_output() -> tuple[Any, Any, list[int], list[float], RunningStats]:
+def initialize_output() -> tuple[Any, Any, dict[str, int], RunningStats]:
     """Initialize output directory, CSV, chart, and stats.
 
     NEW: Very similar to earlier, but now also provides a chart.
 
     Returns:
-        A tuple of (figure, axis, x_values, y_values, stats).
+        A tuple of (figure, axis, product_counts, stats).
     """
     LOG.info("Initializing output...")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -219,7 +219,7 @@ def initialize_output() -> tuple[Any, Any, list[int], list[float], RunningStats]
     LOG.info(f"Output CSV cleared: {OUTPUT_CSV.name}")
 
     # NEW: Initialize the live chart and get the figure, axis, and data lists.
-    figure, axis, x_values, y_values = init_live_chart()
+    figure, axis, product_counts = init_live_chart()
     LOG.info("Live chart initialized.")
 
     # NEW: We can't just return RunningStats(),
@@ -227,14 +227,16 @@ def initialize_output() -> tuple[Any, Any, list[int], list[float], RunningStats]
     stats = RunningStats()
 
     # NEW: Update the return statement to include chart features as well.
-    return figure, axis, x_values, y_values, stats
+    return figure, axis, product_counts, stats
 
 
-def load_reference_data() -> dict[str, float]:
+def load_reference_data() -> tuple[dict[str, float], dict[str, str]]:
     """Load reference data used for message enrichment.
 
     Returns:
-        A dictionary mapping region_id to tax rate as a float.
+        A tuple of:
+          - region_id to tax rate as a float
+          - product_id to product_name
     """
     LOG.info("Loading enrichment reference data...")
     region_lookup: dict[str, float] = {
@@ -246,18 +248,53 @@ def load_reference_data() -> dict[str, float]:
         ).items()
     }
     LOG.info(f"Found {len(region_lookup)} region tax rates.")
-    return region_lookup
+
+    product_lookup: dict[str, str] = {
+        product_id: str(product_name)
+        for product_id, product_name in read_csv_as_lookup(
+            PRODUCTS_CSV,
+            key_field="product_id",
+            value_field="product_name",
+        ).items()
+    }
+    LOG.info(f"Found {len(product_lookup)} product names.")
+    return region_lookup, product_lookup
+
+
+def add_product_name(
+    row: dict[str, Any],
+    product_lookup: dict[str, str],
+) -> dict[str, Any]:
+    """Add product_name to an enriched message using the product lookup.
+
+    Arguments:
+        row: An enriched message row containing product_id.
+        product_lookup: A dict mapping product_id to product_name.
+
+    Returns:
+        A new dict containing all original fields plus product_name.
+    """
+    product_id = str(row.get("product_id", ""))
+    product_name = product_lookup.get(product_id, product_id)
+
+    if product_id not in product_lookup:
+        LOG.warning(f"Product {product_id!r} not in lookup table.")
+
+    return {
+        **row,
+        "product_name": product_name,
+    }
 
 
 def process_message(
     row: dict[str, Any],
     *,
     region_lookup: dict[str, float],
+    product_lookup: dict[str, str],
     stats: RunningStats,
     figure: Any,
     axis: Any,
-    x_values: list[int],
-    y_values: list[float],
+    product_counts: dict[str, int],
 ) -> dict[str, Any] | None:
     """Process one consumed message.
 
@@ -265,8 +302,8 @@ def process_message(
 
     NEW: Update to include visualization parameters and logic.
 
-    NEW: Argument list has been updated include
-         visualization parameters (figure, axis, x_values, y_values).
+    NEW: Argument list has been updated to include
+         visualization parameters (figure, axis, product_counts).
 
     Steps:
       - Validate required fields
@@ -277,11 +314,11 @@ def process_message(
     Arguments:
         row: A raw consumed Kafka message row.
         region_lookup: Tax rates by region_id.
+        product_lookup: Product names by product_id.
         stats: Running statistics accumulator.
         figure: Matplotlib figure.
         axis: Matplotlib axis.
-        x_values: List of x-axis values already shown.
-        y_values: List of y-axis values already shown.
+        product_counts: Running count of units sold by product name.
 
     Returns:
         The enriched row, or None if validation failed.
@@ -296,6 +333,8 @@ def process_message(
 
     # Then, enrich the message with derived fields.
     enriched = enrich_message(row, region_lookup)
+    enriched = add_product_name(enriched, product_lookup)
+    LOG.info(f"product_name={enriched['product_name']}")
     LOG.info(f"subtotal={enriched['subtotal']}")
     LOG.info(f"tax={enriched['tax_amount']}")
     LOG.info(f"total={enriched['total']}")
@@ -308,8 +347,7 @@ def process_message(
     update_live_chart(
         figure=figure,
         axis=axis,
-        x_values=x_values,
-        y_values=y_values,
+        product_counts=product_counts,
         message=enriched,
     )
 
@@ -326,11 +364,11 @@ def consume_messages(
     consumer: Any,
     *,
     region_lookup: dict[str, float],
+    product_lookup: dict[str, str],
     stats: RunningStats,
     figure: Any,
     axis: Any,
-    x_values: list[int],
-    y_values: list[float],
+    product_counts: dict[str, int],
 ) -> tuple[int, int]:
     """Consume and process messages from the Kafka topic.
 
@@ -344,11 +382,11 @@ def consume_messages(
     Arguments:
         consumer: An open Kafka consumer subscribed to the topic.
         region_lookup: Tax rates by region_id.
+        product_lookup: Product names by product_id.
         stats: Running statistics accumulator.
         figure: Matplotlib figure.
         axis: Matplotlib axis.
-        x_values: List of x-axis values already shown.
-        y_values: List of y-axis values already shown.
+        product_counts: Running count of units sold by product name.
 
     Returns:
         A tuple of (consumed_count, skipped_count).
@@ -378,11 +416,11 @@ def consume_messages(
         enriched = process_message(
             row,
             region_lookup=region_lookup,
+            product_lookup=product_lookup,
             stats=stats,
             figure=figure,
             axis=axis,
-            x_values=x_values,
-            y_values=y_values,
+            product_counts=product_counts,
         )
 
         if enriched is None:
@@ -486,9 +524,9 @@ def main() -> None:
 
     # NEW: Add visualization parameters to the
     # unpacking of initialize_output().
-    figure, axis, x_values, y_values, stats = initialize_output()
+    figure, axis, product_counts, stats = initialize_output()
 
-    region_lookup = load_reference_data()
+    region_lookup, product_lookup = load_reference_data()
 
     consumed_count = 0
     skipped_count = 0
@@ -503,11 +541,11 @@ def main() -> None:
             consumed_count, skipped_count = consume_messages(
                 consumer,
                 region_lookup=region_lookup,
+                product_lookup=product_lookup,
                 stats=stats,
                 figure=figure,
                 axis=axis,
-                x_values=x_values,
-                y_values=y_values,
+                product_counts=product_counts,
             )
         finally:
             # Close the Kafka consumer in the inner finally block
